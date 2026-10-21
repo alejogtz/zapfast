@@ -9272,24 +9272,18 @@ impl App {
         if !ctx.text_edit_focused() {
             return;
         }
-        let pressed = ctx.input_mut(|input| {
-            let mut pressed = false;
-            input.events.retain(|event| {
-                let insert = matches!(
-                    event,
-                    egui::Event::Key {
-                        key: egui::Key::Insert,
-                        pressed: true,
-                        modifiers,
-                        ..
-                    } if modifiers.shift && !modifiers.command && !modifiers.alt
-                );
-                pressed |= insert;
-                !insert
-            });
-            pressed
-        });
-        if !pressed {
+        let is_shift_insert = |event: &egui::Event| {
+            matches!(
+                event,
+                egui::Event::Key {
+                    key: egui::Key::Insert,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } if modifiers.shift && !modifiers.command && !modifiers.alt
+            )
+        };
+        if !ctx.input(|input| input.events.iter().any(&is_shift_insert)) {
             return;
         }
         // Tests inject fixtures and must never read the system clipboard.
@@ -9298,9 +9292,23 @@ impl App {
         } else {
             clipboard_text()
         };
-        if let Some(text) = text.filter(|text| !text.is_empty()) {
-            ctx.input_mut(|input| input.events.push(egui::Event::Paste(text)));
-        }
+        let text = text.filter(|text| !text.is_empty());
+        // Replacing the key event where it is keeps the paste's place in the
+        // frame's event order, ahead of anything typed after it.
+        ctx.input_mut(|input| {
+            input.events.retain_mut(|event| {
+                if !is_shift_insert(event) {
+                    return true;
+                }
+                match &text {
+                    Some(text) => {
+                        *event = egui::Event::Paste(text.clone());
+                        true
+                    }
+                    None => false,
+                }
+            });
+        });
     }
 
     /// Handles dropped files and pasted images for the open chat.
