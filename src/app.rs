@@ -9208,6 +9208,7 @@ impl App {
         } else {
             self.scrolling.apply(ctx);
             self.route_scroll(ctx);
+            Self::paste_shift_insert(ctx);
             self.take_drops_and_pastes(ctx);
         }
         crate::ui::show(self, ui);
@@ -9259,6 +9260,47 @@ impl App {
         self.settings.recent_emoji.insert(0, emoji.to_owned());
         self.settings.recent_emoji.truncate(36);
         self.mark_settings_dirty();
+    }
+
+    /// Pastes the clipboard's text on Shift+Insert, as Linux applications do.
+    ///
+    /// egui-winit turns only Ctrl/Cmd+V into a `Paste` event, but on Wayland
+    /// espanso pastes clipboard-based expansions (non-ASCII text, long
+    /// replacements) with Shift+Insert, so without this their trigger is
+    /// deleted and nothing appears.
+    fn paste_shift_insert(ctx: &egui::Context) {
+        if !ctx.text_edit_focused() {
+            return;
+        }
+        let pressed = ctx.input_mut(|input| {
+            let mut pressed = false;
+            input.events.retain(|event| {
+                let insert = matches!(
+                    event,
+                    egui::Event::Key {
+                        key: egui::Key::Insert,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } if modifiers.shift && !modifiers.command && !modifiers.alt
+                );
+                pressed |= insert;
+                !insert
+            });
+            pressed
+        });
+        if !pressed {
+            return;
+        }
+        // Tests inject fixtures and must never read the system clipboard.
+        let text = if cfg!(test) {
+            ctx.data_mut(|data| data.remove_temp::<String>(egui::Id::new("fixture-clipboard-text")))
+        } else {
+            clipboard_text()
+        };
+        if let Some(text) = text.filter(|text| !text.is_empty()) {
+            ctx.input_mut(|input| input.events.push(egui::Event::Paste(text)));
+        }
     }
 
     /// Handles dropped files and pasted images for the open chat.
@@ -9705,6 +9747,11 @@ fn clipboard_contents(
         }),
         Err(why) => Err(format!("{files}, no picture ({why})")),
     }
+}
+
+/// The clipboard's text, if it holds any.
+fn clipboard_text() -> Option<String> {
+    arboard::Clipboard::new().ok()?.get_text().ok()
 }
 
 /// Files copied to the clipboard by a file manager.
